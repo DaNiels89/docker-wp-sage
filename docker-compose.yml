@@ -1,0 +1,105 @@
+services:
+  mysql:
+    image: '${MYSQL_IMAGE:-mysql:8.0}'
+    container_name: mysql
+    restart: unless-stopped
+    ports:
+      - '${FORWARD_DB_PORT:-3306}:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: '${DB_ROOT_PASSWORD:-secret}'
+      MYSQL_DATABASE: '${DB_DATABASE:-mysql_db}'
+      MYSQL_USER: '${DB_USERNAME:-db_user}'
+      MYSQL_PASSWORD: '${DB_PASSWORD:-secret}'
+    volumes:
+      - wpmysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - app-network
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    ports:
+      - '8080:80'
+    environment:
+      PMA_HOST: mysql
+      MYSQL_ROOT_PASSWORD: '${DB_ROOT_PASSWORD:-secret}'
+      UPLOAD_LIMIT: 2000M
+    networks:
+      - app-network
+
+  wordpress:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PHP_VERSION: '${PHP_VERSION:-8.4}'
+    container_name: wordpress
+    depends_on:
+      - mysql
+    restart: unless-stopped
+    ports:
+      - '9000:9000'
+      - '5173:5173' # Vite Dev Server
+    volumes:
+      - './:/var/www/html'
+      - './php/php.ini:/usr/local/etc/php/conf.d/local.ini'
+    environment:
+      WORDPRESS_DB_HOST: mysql
+      WORDPRESS_DB_USER: '${DB_USERNAME:-db_user}'
+      WORDPRESS_DB_PASSWORD: '${DB_PASSWORD:-secret}'
+      WORDPRESS_DB_NAME: '${DB_DATABASE:-mysql_db}'
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - app-network
+
+  wpcli:
+    image: wordpress:cli
+    container_name: wpcli
+    depends_on:
+      - mysql
+    volumes:
+      - './:/var/www/html'
+    networks:
+      - app-network
+    profiles:
+      - cli
+
+  server:
+    image: nginx:alpine
+    container_name: nginx
+    depends_on:
+      - wordpress
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - './:/var/www/html'
+      - './nginx/conf.d/:/etc/nginx/conf.d'
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  wpmysql:
+    driver: local
